@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#17365d">
+  <title>Engagements – Triathlon U14</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: Arial, sans-serif;
+      background: #f3f5f7;
+      margin: 0;
+      padding: 20px;
+      color: #222;
+    }
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+      background: white;
+      padding: 24px;
+      border-radius: 12px;
+      box-shadow: 0 2px 10px rgba(0,0,0,.08);
+    }
+    h1 { font-size: 24px; margin-top: 0; color: #17365d; }
+    label { display: block; font-weight: bold; margin: 18px 0 7px; }
+    input, select, button {
+      box-sizing: border-box;
+      width: 100%;
+      padding: 12px;
+      font-size: 16px;
+      border: 1px solid #ccc;
+      border-radius: 7px;
+    }
+    button {
+      margin-top: 24px;
+      background: #17365d;
+      color: white;
+      font-weight: bold;
+      border: 0;
+      cursor: pointer;
+    }
+    button:disabled { opacity: .6; cursor: wait; }
+    #message { margin-top: 18px; font-weight: bold; }
+    .fixed-event {
+      background: #eef2f6;
+      padding: 12px;
+      border-radius: 7px;
+      border: 1px solid #d5dce5;
+      margin-top: 8px;
+    }
+    .fixed-event strong { display: block; margin-bottom: 4px; }
+    .info { color: #555; font-size: 13px; margin-top: 5px; }
+    @media (max-width: 480px) {
+      body { padding: 12px; }
+      .container { padding: 18px; }
+      h1 { font-size: 21px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Engagements – Triathlon U14</h1>
+    <form id="engagementForm">
+      <label for="competition">Compétition</label>
+      <select id="competition" required>
+        <option value="">Chargement des compétitions...</option>
+      </select>
+
+      <label for="athlete">Athlète</label>
+      <select id="athlete" required>
+        <option value="">Chargement des athlètes...</option>
+      </select>
+
+      <label for="type">Type de triathlon</label>
+      <select id="type" required disabled>
+        <option value="">Sélectionner un athlète d'abord</option>
+      </select>
+
+      <div id="eventFields"></div>
+      <button id="submitButton" type="submit">Enregistrer l'engagement</button>
+      <div id="message" role="status" aria-live="polite"></div>
+    </form>
+  </div>
+
+  <script>
+    let athletes = [];
+    let events = [];
+    let competitions = [];
+    let selectedAthlete = null;
+
+    const CLASSIC_TYPE = 'Triathlon classique (course - saut - lancer)';
+    const WINTER_TYPE = 'Triathlon hivernal (50m - 50 haies - concours)';
+    const CLASSIC_COURSES = ['50 m', '50 m haies', '1 000 m', '2 000 m marche'];
+
+    const competitionSelect = document.getElementById('competition');
+    const athleteSelect = document.getElementById('athlete');
+    const typeSelect = document.getElementById('type');
+    const eventFields = document.getElementById('eventFields');
+    const message = document.getElementById('message');
+    const submitButton = document.getElementById('submitButton');
+
+    document.addEventListener('DOMContentLoaded', loadData);
+
+    async function callApi(action, data) {
+      const response = await fetch('/.netlify/functions/api', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, data: data || {} })
+      });
+      const result = await response.json();
+      if (!response.ok || result.success === false) {
+        throw new Error(result.message || 'Une erreur est survenue.');
+      }
+      return result;
+    }
+
+    async function loadData() {
+      try {
+        const data = await callApi('getInitialData');
+        athletes = data.athletes || [];
+        events = data.events || [];
+        competitions = data.competitions || [];
+
+        competitionSelect.innerHTML = '<option value="">Choisir une compétition</option>';
+        competitions.forEach(name => {
+          const option = document.createElement('option');
+          option.value = name;
+          option.textContent = name;
+          competitionSelect.appendChild(option);
+        });
+        if (!competitions.length) {
+          competitionSelect.innerHTML = '<option value="">Aucune compétition active</option>';
+        }
+
+        athleteSelect.innerHTML = '<option value="">Choisir un athlète</option>';
+        athletes.forEach(athlete => {
+          const option = document.createElement('option');
+          option.value = athlete.id;
+          option.textContent = athlete.nom;
+          athleteSelect.appendChild(option);
+        });
+        if (!athletes.length) {
+          athleteSelect.innerHTML = '<option value="">Aucun athlète U14 actif</option>';
+        }
+      } catch (error) {
+        showError(error);
+        competitionSelect.innerHTML = '<option value="">Erreur de chargement</option>';
+        athleteSelect.innerHTML = '<option value="">Erreur de chargement</option>';
+      }
+    }
+
+    athleteSelect.addEventListener('change', () => {
+      selectedAthlete = athletes.find(a => a.id === athleteSelect.value) || null;
+      typeSelect.innerHTML = '<option value="">Choisir un type de triathlon</option>';
+      eventFields.innerHTML = '';
+      message.textContent = '';
+
+      if (!selectedAthlete) {
+        typeSelect.disabled = true;
+        return;
+      }
+
+      [CLASSIC_TYPE, WINTER_TYPE].forEach(type => {
+        const option = document.createElement('option');
+        option.value = type;
+        option.textContent = type;
+        typeSelect.appendChild(option);
+      });
+      typeSelect.disabled = false;
+    });
+
+    typeSelect.addEventListener('change', renderEvents);
+
+    function getAvailableEvents() {
+      if (!selectedAthlete) return [];
+      return events.filter(event => event.sexe === selectedAthlete.sexe);
+    }
+
+    function renderEvents() {
+      eventFields.innerHTML = '';
+      message.textContent = '';
+      const type = typeSelect.value;
+      if (!type) return;
+
+      const available = getAvailableEvents();
+      if (type === CLASSIC_TYPE) {
+        addEventSelect('Épreuve de course', 'event1',
+          available.filter(e => CLASSIC_COURSES.includes(e.epreuve)));
+        addEventSelect('Épreuve de saut', 'event2',
+          available.filter(e => e.famille === 'SAUT'));
+        addEventSelect('Épreuve de lancer', 'event3',
+          available.filter(e => e.famille === 'LANCER'));
+      }
+
+      if (type === WINTER_TYPE) {
+        addFixedEvent('50 m', 'event1');
+        addFixedEvent('50 m haies', 'event2');
+        addEventSelect('Choisis ton concours (saut ou lancer)', 'event3',
+          available.filter(e => e.famille === 'SAUT' || e.famille === 'LANCER'));
+      }
+    }
+
+    function addFixedEvent(name, fieldName) {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'fixed-event';
+      const label = document.createElement('strong');
+      label.textContent = 'Course imposée';
+      const value = document.createElement('div');
+      value.textContent = name;
+      const input = document.createElement('input');
+      input.type = 'hidden';
+      input.id = fieldName;
+      input.name = fieldName;
+      input.value = name;
+      wrapper.append(label, value, input);
+      eventFields.appendChild(wrapper);
+    }
+
+    function addEventSelect(labelText, fieldName, choices) {
+      const label = document.createElement('label');
+      label.textContent = labelText;
+      label.htmlFor = fieldName;
+      const select = document.createElement('select');
+      select.id = fieldName;
+      select.name = fieldName;
+      select.required = true;
+
+      const placeholder = document.createElement('option');
+      placeholder.value = '';
+      placeholder.textContent = 'Choisir une épreuve';
+      select.appendChild(placeholder);
+
+      choices.forEach(event => {
+        const option = document.createElement('option');
+        option.value = event.epreuve;
+        option.textContent = event.epreuve;
+        select.appendChild(option);
+      });
+      eventFields.append(label, select);
+    }
+
+    document.getElementById('engagementForm').addEventListener('submit', async event => {
+      event.preventDefault();
+      message.textContent = '';
+
+      const data = {
+        competition: competitionSelect.value,
+        athleteId: athleteSelect.value,
+        type: typeSelect.value,
+        event1: document.getElementById('event1')?.value || '',
+        event2: document.getElementById('event2')?.value || '',
+        event3: document.getElementById('event3')?.value || ''
+      };
+
+      submitButton.disabled = true;
+      submitButton.textContent = 'Enregistrement...';
+
+      try {
+        const result = await callApi('submitEngagement', data);
+        message.textContent = result.message || 'Engagement enregistré.';
+        message.style.color = 'green';
+        document.getElementById('engagementForm').reset();
+        eventFields.innerHTML = '';
+        typeSelect.innerHTML = '<option value="">Sélectionner un athlète d’abord</option>';
+        typeSelect.disabled = true;
+        selectedAthlete = null;
+      } catch (error) {
+        showError(error);
+      } finally {
+        submitButton.disabled = false;
+        submitButton.textContent = 'Enregistrer l’engagement';
+      }
+    });
+
+    function showError(error) {
+      message.textContent = error && error.message ? error.message : String(error);
+      message.style.color = 'red';
+    }
+  </script>
+</body>
+</html>
